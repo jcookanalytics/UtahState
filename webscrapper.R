@@ -4,6 +4,7 @@
 library(XML)
 library(stringr)
 library(reshape2)
+library(plyr)
 library(ggplot2)
 library(scales)
 library(grid)
@@ -95,20 +96,62 @@ for (i in grep("G",Game$Down.Distance)){
 }
 
 #Type of plays
-type <- paste("(?<![A-Za-z0-9])[0-9]+","no gain","kick","rush","pass","punt","lost","sack","PENALTY","field goal","return","drop","loss","incomplete","TOUCHDOWN","DOWN","touchback","intercepted","fumble","NO PLAY",sep="|")
+type <- paste("(?<![A-Za-z0-9])[0-9]+","no gain","kickoff","rush","pass","punt","lost","sack","PENALTY","field goal","return","drop","loss","incomplete","TOUCHDOWN","DOWN","touchback","intercepted","fumble","NO PLAY","GOOD","MISSED",sep="|")
 Game$Type <- str_extract_all(Game$Play,type)
 Game$Type <- as.character(Game$Type)
 Game$Type[Game$Type=="character(0)"] <- ""
 Game$Type <- gsub(x= Game$Type, pattern = "^c","")
 Game$Type <- gsub(x= Game$Type, pattern = "[[:punct:]]","")
 
+#Penalties
+Game$Penalty <- str_extract(Game$Type,"(?i)(?<=PENALTY\\D)\\d+")
+Game$Penalty <- as.numeric(Game$Penalty)
+Game$PenaltyOn <- str_extract(Game$Play,"(?<=PENALTY )[A-Z]+")
+Game$PenaltyOn[is.na(Game$PenaltyOn)] <- ""
+
+#First Downs (note that in college a touchdown that is not goal to go is considered a first down)
 Game$FirstDown <- 0
 Game$FirstDown[grep("1 DOWN", Game$Type)] <- 1
 Game$FirstDown <- as.numeric(Game$FirstDown)
-#Game$FirstDown[grep("1 DOWN TOUCHDOWN", Game$Type)] <- NA
 
-Game$Kick <- str_extract(Game$Type,"(?i)(?<=kick\\D)\\d+")
-Game$Kick <- as.numeric(Game$Kick)
+#Touchdowns
+Game$Touchdown <- 0
+Game$Touchdown[grep("TOUCHDOWN", Game$Type)] <- 1
+
+#Field goals
+Game$FieldGoal <- str_extract(Game$Type,"(?i)(?<=field goal\\D)\\d+")
+Game$FieldGoal <- as.numeric(Game$FieldGoal)
+Game$FieldGoalStatus <- 0
+Game$FieldGoalStatus[grep("GOOD",Game$Type)] <- 1
+
+#Success
+Success <- numeric(gamerows)
+for (i in 1:gamerows){
+  if (Game$FirstDown[i]==1){
+    Success[i] <- 1}
+}
+for (i in 1:gamerows){
+  if (Game$Touchdown[i]==1){
+    Success[i] <- 2}
+}  
+for (i in 1:gamerows){
+  if (Game$FieldGoalStatus[i]==1){
+    Success[i] <- 3}
+}
+Game$Success <- Success
+
+#Kickoff
+Game$Kickoff <- str_extract(Game$Type,"(?i)(?<=kickoff\\D)\\d+")
+Game$Kickoff <- as.numeric(Game$Kick)
+#Touchbacks
+Game$Touchback <- NA
+Game$Touchback[grep("touchback",Game$Type)] <- 1
+
+#Punts
+Game$Punt <- str_extract(Game$Type,"(?i)(?<=punt\\D)\\d+")
+Game$Punt <- as.numeric(Game$Punt)
+
+#Returns includes all returns
 Game$Return <- str_extract(Game$Type,"(?i)(?<=return\\D)\\d+")
 Game$Return <- as.numeric(Game$Return)
 
@@ -121,7 +164,21 @@ Game$RushLoss <- Game$RushLoss*-1
 Game$Sack <- str_extract(Game$Type,"(?i)(?<=sack loss\\D)\\d+")
 Game$Sack <- as.numeric(Game$Sack)
 Game$Sack <- Game$Sack*-1
-Game$RushNet <- Game$Rush + Game$RushLoss + Game$Sack
+
+#RushNet
+RushNet <- numeric(gamerows)
+for (i in 1:gamerows) {
+  if (Game$Possession[i]==Game$PenaltyOn[i]) {
+    RushNet[i] <- 0 }
+  else if (!is.na(Game$Rush[i])) {
+    RushNet[i] <- Game$Rush[i] }
+  else if (!is.na(Game$Sack[i])) {
+    RushNet[i] <- Game$Sack[i] }
+  else if  (!is.na(Game$RushLoss[i])) {
+    RushNet[i] <- Game$RushLoss[i] }
+}
+Game$RushNet <- RushNet
+Game$RushNet[setdiff(1:gamerows,grep("rush|sack",Game$Type))] <- NA
 
 #Calculate passing for each play
 Game$Pass <- str_extract(Game$Type,"(?i)(?<=pass\\D)\\d+")
@@ -130,25 +187,31 @@ Game$PassLoss <- str_extract(Game$Type,"(?i)(?<=pass loss\\D)\\d+")
 Game$PassLoss <- as.numeric(Game$PassLoss)
 Game$PassLoss <- Game$PassLoss*-1
 
-#Penalties
-Game$Penalty <- str_extract(Game$Type,"(?i)(?<=PENALTY\\D)\\d+")
-Game$Penalty <- as.numeric(Game$Penalty)
-Game$PenaltyOn <- str_extract(Game$Play,"(?<=PENALTY )[A-Z]+")
+PassNet <- numeric(gamerows)
+for (i in 1:gamerows) {
+  if (Game$Possession[i]==Game$PenaltyOn[i]) {
+    PassNet[i] <- 0 }
+  else if (!is.na(Game$Pass[i])) {
+    PassNet[i] <- Game$Pass[i] }
+  else if  (!is.na(Game$PassLoss[i])) {
+    PassNet[i] <- Game$PassLoss[i] }
+}
 
-
+Game$PassNet <- PassNet
+Game$PassNet[setdiff(1:gamerows,grep("pass",Game$Type))] <- NA
 
 #Utah State Analysis
 UtahState <- Game[Game$Possession=="USU",]
 
-UtahStateDownsDataSuccess <- count(UtahState, vars= c("Down","Distance","FirstDown"))
-names(UtahStateDownsDataSuccess) <- c("Down","Distance","FirstDown","Count")
+UtahStateDownsDataSuccess <- count(UtahState, vars= c("Down","Distance","Success"))
+names(UtahStateDownsDataSuccess) <- c("Down","Distance","Success","Count")
 
 
-FirstDown <- ggplot(UtahStateDownsDataSuccess[UtahStateDownsDataSuccess$Down==1,],aes(x=Distance,y=Count,fill=factor(FirstDown))) + geom_bar(stat="identity", width = .9)+theme_bw()+ggtitle("First Down") + xlim(0,15) + theme(legend.position = "none") + scale_fill_manual(values=c("red","green"))
-SecondDown <- ggplot(UtahStateDownsDataSuccess[UtahStateDownsDataSuccess$Down==2,],aes(x=Distance,y=Count,fill=factor(FirstDown))) + geom_bar(stat="identity", width = .9)+theme_bw()+ggtitle("Second Down") + xlim(0,15) + theme(legend.position = "none") + scale_fill_manual(values=c("red","green"))
-ThirdDown <- ggplot(UtahStateDownsDataSuccess[UtahStateDownsDataSuccess$Down==3,],aes(x=Distance,y=Count,fill=factor(FirstDown))) + geom_bar(stat="identity", width = .9)+theme_bw()+ggtitle("Third Down") + xlim(0,15) + theme(legend.position = "none") + scale_fill_manual(values=c("red","green"))
-FourthDown <- ggplot(UtahStateDownsDataSuccess[UtahStateDownsDataSuccess$Down==4,],aes(x=Distance,y=Count,fill=factor(FirstDown))) + geom_bar(stat="identity", width = .9)+theme_bw()+ggtitle("Fourth Down") + xlim(0,15) + theme(legend.position = "none") + scale_fill_manual(values=c("red","green"))
-grid.arrange(FirstDown,SecondDown,ThirdDown,FourthDown, ncol=2, top = "Downs by Frequency and First Down")
+FirstDown <- ggplot(UtahStateDownsDataSuccess[UtahStateDownsDataSuccess$Down==1,],aes(x=Distance,y=Count,fill=factor(Success))) + geom_bar(stat="identity", width = .9)+theme_bw()+ggtitle("First Down") + xlim(0,15) + theme(legend.position = "none") + scale_fill_manual(values=c("red","blue","green","yellow"))
+SecondDown <- ggplot(UtahStateDownsDataSuccess[UtahStateDownsDataSuccess$Down==2,],aes(x=Distance,y=Count,fill=factor(Success))) + geom_bar(stat="identity", width = .9)+theme_bw()+ggtitle("Second Down") + xlim(0,15) + theme(legend.position = "none") + scale_fill_manual(values=c("red","green","blue","yellow"))
+ThirdDown <- ggplot(UtahStateDownsDataSuccess[UtahStateDownsDataSuccess$Down==3,],aes(x=Distance,y=Count,fill=factor(Success))) + geom_bar(stat="identity", width = .9)+theme_bw()+ggtitle("Third Down") + xlim(0,15) + theme(legend.position = "none") + scale_fill_manual(values=c("red","green","blue","yellow"))
+FourthDown <- ggplot(UtahStateDownsDataSuccess[UtahStateDownsDataSuccess$Down==4,],aes(x=Distance,y=Count,fill=factor(Success))) + geom_bar(stat="identity", width = .9)+theme_bw()+ggtitle("Fourth Down") + xlim(0,15) + theme(legend.position = "none") + scale_fill_manual(values=c("red","green","blue","yellow"))
+grid.arrange(FirstDown,SecondDown,ThirdDown,FourthDown, ncol=2, top = "Downs by Frequency and Success")
 
 
 
