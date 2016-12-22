@@ -9,49 +9,40 @@ library(ggplot2)
 library(scales)
 library(grid)
 library(gridExtra)
+library(RColorBrewer)
 
-siteurl <- "http://www.utahstateaggies.com/sports/m-footbl/stats/2016-2017/usu01.html"
-tables <- readHTMLTable(siteurl)
+########## Grab the data from site and combine into a single data frame #########
+source("analysis/data/scraphtml.R")
 
-#####Pull the tables for each quarter
-first_quarter_table <- tables[[43]]
-second_quarter_table <- tables[[44]]
-third_quarter_table <- tables[[45]]
-fourth_quarter_table <- tables[[46]]
 
-###First Quarter Info
-first_quarter_name <- t(as.data.frame(names(first_quarter_table)))
-colnames(first_quarter_table) <- c("Possession","Down.Distance","Yard.Line","Play")
-colnames(first_quarter_name) <- c("Possession","Down.Distance","Yard.Line","Play")
-first_quarter <- rbind(first_quarter_name,first_quarter_table, make.row.names =TRUE)
-first_quarter$Quarter <- 1
+#add the score to the game table
+#create score table
+Score <- Game[grep("Utah State", Game$Play),]
+Score <- Score[Score$Possession=="",]
+Score$row <- row.names(Score)
 
-###Second Quarter
-second_quarter_name <- t(as.data.frame(names(second_quarter_table)))
-colnames(second_quarter_table) <- c("Possession","Down.Distance","Yard.Line","Play")
-colnames(second_quarter_name) <- c("Possession","Down.Distance","Yard.Line","Play")
-second_quarter <- rbind(second_quarter_name,second_quarter_table, make.row.names =TRUE)
-second_quarter$Quarter <- 2
+#break off into a seperate vectors and then into a table
+numbers <- as.character(unlist(str_extract_all(Score$Play, "[0-9]+")))
+teams <- as.character(unlist(str_extract_all(Score$Play, "[A-z]+ [A-z]+")))
+numbers <- data.frame(matrix(numbers, ncol = 2, byrow = TRUE))
+teams <- teams[1:2]
+teams[teams!="Utah State"] <- "Opponent"
+teams[teams=="Utah State"] <- "UtahState"
+names(numbers) <- teams
 
-###Third Quarter
-third_quarter_name <- t(as.data.frame(names(third_quarter_table)))
-colnames(third_quarter_table) <- c("Possession","Down.Distance","Yard.Line","Play")
-colnames(third_quarter_name) <- c("Possession","Down.Distance","Yard.Line","Play")
-third_quarter <- rbind(third_quarter_name,third_quarter_table, make.row.names =TRUE)
-third_quarter$Quarter <- 3
+#combine back into the main score table
+Score$UtahState <- numbers$UtahState 
+Score$Opponent <- numbers$Opponent
+rm(numbers)
 
-###Fourth Quarter
-fourth_quarter_name <- t(as.data.frame(names(fourth_quarter_table)))
-colnames(fourth_quarter_table) <- c("Possession","Down.Distance","Yard.Line","Play")
-colnames(fourth_quarter_name) <- c("Possession","Down.Distance","Yard.Line","Play")
-fourth_quarter <- rbind(fourth_quarter_name,fourth_quarter_table, make.row.names =TRUE)
-fourth_quarter$Quarter <- 4
+#fill the score in for everyplay
 
-###Combine Data Sets
-Game <- rbind(first_quarter,second_quarter,third_quarter,fourth_quarter, make.row.names=FALSE)
+
+
+
 
 #Drop unnecessary rows
-Game <- Game[-grep("won the toss", Game$Play),]
+Game <- Game[-grep("won the toss|Coin Toss", Game$Play),]
 Game <- Game[-grep("Drive", Game$Play),]
 Game <- Game[-grep("ball on", Game$Play),]
 Game <- Game[-grep("at QB", Game$Play),]
@@ -139,6 +130,8 @@ for (i in 1:gamerows){
     Success[i] <- 3}
 }
 Game$Success <- Success
+Game$Success <- factor(Game$Success)
+levels(Game$Success) <- c("0","1","2","3")
 
 #Kickoff
 Game$Kickoff <- str_extract(Game$Type,"(?i)(?<=kickoff\\D)\\d+")
@@ -203,25 +196,34 @@ Game$PassNet[setdiff(1:gamerows,grep("pass",Game$Type))] <- NA
 #Utah State Analysis
 UtahState <- Game[Game$Possession=="USU",]
 
-UtahStateDownsDataSuccess <- count(UtahState, vars= c("Down","Distance","Success"))
-names(UtahStateDownsDataSuccess) <- c("Down","Distance","Success","Count")
+UtahStateDownsDataSuccess <- data.frame(table(UtahState$Success,UtahState$Distance,UtahState$Down))
+
+names(UtahStateDownsDataSuccess) <- c("Success","Distance","Down","Count")
 
 
-FirstDown <- ggplot(UtahStateDownsDataSuccess[UtahStateDownsDataSuccess$Down==1,],aes(x=Distance,y=Count,fill=factor(Success))) + geom_bar(stat="identity", width = .9)+theme_bw()+ggtitle("First Down") + xlim(0,15) + theme(legend.position = "none") + scale_fill_manual(values=c("red","blue","green","yellow"))
-SecondDown <- ggplot(UtahStateDownsDataSuccess[UtahStateDownsDataSuccess$Down==2,],aes(x=Distance,y=Count,fill=factor(Success))) + geom_bar(stat="identity", width = .9)+theme_bw()+ggtitle("Second Down") + xlim(0,15) + theme(legend.position = "none") + scale_fill_manual(values=c("red","green","blue","yellow"))
-ThirdDown <- ggplot(UtahStateDownsDataSuccess[UtahStateDownsDataSuccess$Down==3,],aes(x=Distance,y=Count,fill=factor(Success))) + geom_bar(stat="identity", width = .9)+theme_bw()+ggtitle("Third Down") + xlim(0,15) + theme(legend.position = "none") + scale_fill_manual(values=c("red","green","blue","yellow"))
-FourthDown <- ggplot(UtahStateDownsDataSuccess[UtahStateDownsDataSuccess$Down==4,],aes(x=Distance,y=Count,fill=factor(Success))) + geom_bar(stat="identity", width = .9)+theme_bw()+ggtitle("Fourth Down") + xlim(0,15) + theme(legend.position = "none") + scale_fill_manual(values=c("red","green","blue","yellow"))
+myColors <- brewer.pal(4,"Set1")
+colScale <- scale_colour_manual(name = "Success",values = myColors,breaks=c(0,1,2,3),labels=c("Failed","FieldGoal","First Down","Touchdown"))
+
+
+
+play <- character(nrow(UtahStateDownsDataSuccess))
+for (i in 1:nrow(UtahStateDownsDataSuccess)){
+  if (UtahStateDownsDataSuccess$Success[i]==0){
+    play[i] <- "Failed"
+  }else if (UtahStateDownsDataSuccess$Success[i]==1){
+    play[i] <- "First Down"
+  }else if (UtahStateDownsDataSuccess$Success[i]==2){
+    play[i] <- "Touchdown"
+  }else if (UtahStateDownsDataSuccess$Success[i]==3){
+    play[i] <- "Field Goal"
+  }
+}
+UtahStateDownsDataSuccess$Play <- play
+
+FirstDown <- ggplot(data=UtahStateDownsDataSuccess[UtahStateDownsDataSuccess$Down==1,],aes(x=Distance, y=Count ,fill=Play)) + geom_bar(stat="identity") + theme(legend.position = "none")
+SecondDown <- ggplot(data=UtahStateDownsDataSuccess[UtahStateDownsDataSuccess$Down==2,],aes(x=Distance, y=Count ,fill=Play)) + geom_bar(stat="identity") + theme(legend.position = "none")
+ThirdDown <- ggplot(data=UtahStateDownsDataSuccess[UtahStateDownsDataSuccess$Down==3,],aes(x=Distance, y=Count ,fill=Play)) + geom_bar(stat="identity") + theme(legend.position = "none")
+FourthDown <- ggplot(data=UtahStateDownsDataSuccess[UtahStateDownsDataSuccess$Down==4,],aes(x=Distance, y=Count ,fill=Play)) + geom_bar(stat="identity") + theme(legend.position = "none")
 grid.arrange(FirstDown,SecondDown,ThirdDown,FourthDown, ncol=2, top = "Downs by Frequency and Success")
-
-
-
-
-  
-
-
-
-
-
-
 
 
